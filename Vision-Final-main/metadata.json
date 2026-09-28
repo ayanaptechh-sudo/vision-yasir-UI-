@@ -1,0 +1,6 @@
+{
+  "name": "AuthShield 360",
+  "description": "AuthShield 360: VerifyVault - Identity Beyond Passwords. Production-grade cybersecurity educational platform comparing Password-Only, Password + OTP, and Password + Multi-Factor OTP with RBAC, failed-login protection, audit logging, and security testing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
