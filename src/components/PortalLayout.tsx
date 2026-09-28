@@ -11,8 +11,6 @@ import {
   FileText,
   Search,
   Bell,
-  Sun,
-  Moon,
   LogOut,
   Menu,
   X,
@@ -48,7 +46,7 @@ export const PortalLayout: React.FC<PortalLayoutProps> = ({
   setCurrentTab,
   children,
 }) => {
-  const { user, logout, theme, toggleTheme } = useAuth();
+  const { user, logout } = useAuth();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [profileDropdownOpen, setProfileDropdownOpen] = useState(false);
@@ -965,33 +963,6 @@ export const PortalLayout: React.FC<PortalLayoutProps> = ({
                   shadow-[0_0_7px_rgba(167,139,250,0.9)]
                 "
               />
-            </button>
-
-            {/* Theme */}
-            <button
-              onClick={toggleTheme}
-              className="
-                p-2.5
-                rounded-xl
-                text-slate-500
-                bg-white/[0.025]
-                border
-                border-white/[0.06]
-                hover:text-violet-300
-                hover:bg-violet-500/10
-                transition-all
-              "
-              title={
-                theme === 'dark'
-                  ? 'Switch to Light Mode'
-                  : 'Switch to Dark Mode'
-              }
-            >
-              {theme === 'dark' ? (
-                <Sun className="w-4 h-4 text-amber-300" />
-              ) : (
-                <Moon className="w-4 h-4" />
-              )}
             </button>
 
             {/* Profile */}

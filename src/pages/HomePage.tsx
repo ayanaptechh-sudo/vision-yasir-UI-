@@ -170,6 +170,53 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigateToLogin }) => {
     },
   ];
 
+  const teamMembers = [
+    {
+      name: 'Ayan Khan',
+      role: 'Penetration Tester & Developer',
+      initials: 'AK',
+      accentColor: 'from-violet-500 via-purple-600 to-indigo-600',
+      badgeColor: 'bg-violet-500/10 text-violet-300 border-violet-500/30',
+      icon: Terminal,
+      skills: ['Penetration Testing', 'Identity Security', 'AppSec'],
+      description:
+        'Focused on offensive security assessments, vulnerability research, and architecting zero-trust authentication safeguards.',
+    },
+    {
+      name: 'Yasir Khan',
+      role: 'SOC Analyst & Developer',
+      initials: 'YK',
+      accentColor: 'from-cyan-500 via-blue-600 to-indigo-600',
+      badgeColor: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
+      icon: Activity,
+      skills: ['Threat Telemetry', 'Incident Response', 'SOC Operations'],
+      description:
+        'Specializing in real-time threat monitoring, defensive telemetry pipelines, SIEM correlation, and automated incident mitigation.',
+    },
+    {
+      name: 'M. Alwaz',
+      role: 'Reverse Engineer',
+      initials: 'MA',
+      accentColor: 'from-emerald-500 via-teal-600 to-indigo-600',
+      badgeColor: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+      icon: Cpu,
+      skills: ['Binary Analysis', 'Cryptographic Auditing', 'Malware Defense'],
+      description:
+        'Dedicated to binary disassembly, cryptographic protocol verification, software vulnerability discovery, and low-level system audits.',
+    },
+    {
+      name: 'Tayyaba Shahzad',
+      role: 'GRC Specialist',
+      initials: 'TS',
+      accentColor: 'from-pink-500 via-purple-600 to-indigo-600',
+      badgeColor: 'bg-pink-500/10 text-pink-300 border-pink-500/30',
+      icon: FileCheck,
+      skills: ['GRC Frameworks', 'NIST / ISO Standards', 'Risk Auditing'],
+      description:
+        'Ensuring governance compliance, risk management frameworks, institutional regulatory alignment, and information security policy assurance.',
+    },
+  ];
+
   return (
     <div className="min-h-screen bg-[#080411] text-slate-100 flex flex-col font-sans selection:bg-purple-500/30 selection:text-purple-200 relative overflow-x-hidden">
       {/* ========================================================= */}
@@ -266,6 +313,16 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigateToLogin }) => {
               }`}
             >
               MFA Benchmarks
+            </button>
+            <button
+              onClick={() => scrollTo('team', 'team')}
+              className={`text-xs font-medium px-4 py-1.5 rounded-full transition-all cursor-pointer ${
+                activeNav === 'team'
+                  ? 'bg-white text-slate-950 shadow-[0_0_16px_rgba(255,255,255,0.45)]'
+                  : 'text-purple-200/70 hover:text-white'
+              }`}
+            >
+              Meet Our Team
             </button>
             <button
               onClick={() => scrollTo('audit', 'audit')}
@@ -623,6 +680,102 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigateToLogin }) => {
                   <div className="pt-4 mt-4 border-t border-purple-500/15 flex items-center justify-between text-xs">
                     <span className="text-[11px] text-purple-300/60 font-semibold">Semester Lab Included</span>
                     <ChevronRight className="w-4 h-4 text-purple-400 group-hover:translate-x-1 transition-all" />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* ========================================================= */}
+      {/* MEET OUR TEAM SECTION                                     */}
+      {/* ========================================================= */}
+      <section id="team" className="relative z-10 py-16 sm:py-24 border-t border-purple-500/15 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full">
+        <div className="space-y-12">
+          {/* Section Header */}
+          <div className="text-center max-w-2xl mx-auto space-y-3">
+            <span className="font-tech text-xs font-bold uppercase tracking-widest text-[#c084fc]">
+              SECURITY RESEARCH &amp; ARCHITECTURE
+            </span>
+            <h2 className="font-syne text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+              Meet Our Team
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-300/80 leading-relaxed">
+              Meet the team behind AuthShield 360.
+            </p>
+          </div>
+
+          {/* 4 Professional Team Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {teamMembers.map((member, idx) => {
+              const Icon = member.icon;
+              return (
+                <div
+                  key={idx}
+                  className="rounded-3xl bg-[#110724]/70 backdrop-blur-md border border-purple-500/20 p-6 shadow-sm hover:border-purple-400/50 hover:shadow-[0_0_30px_rgba(168,85,247,0.22)] hover:-translate-y-1.5 transition-all duration-300 flex flex-col justify-between group relative overflow-hidden"
+                >
+                  {/* Subtle ambient backglow */}
+                  <div className="absolute -top-14 -right-14 w-28 h-28 bg-purple-500/10 rounded-full blur-2xl group-hover:bg-purple-500/20 transition-all pointer-events-none" />
+
+                  <div className="space-y-4 relative z-10">
+                    {/* Profile / Avatar Area */}
+                    <div className="flex items-center justify-between">
+                      <div className="relative">
+                        <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${member.accentColor} p-[1.5px] shadow-lg shadow-purple-950/50 group-hover:scale-105 transition-transform duration-300`}>
+                          <div className="w-full h-full rounded-[14px] bg-[#0c051a] flex items-center justify-center">
+                            <span className="font-syne font-black text-lg bg-gradient-to-br from-white via-purple-100 to-purple-300 bg-clip-text text-transparent">
+                              {member.initials}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Specialization Icon Tag Badge */}
+                        <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-lg bg-[#14082c] border border-purple-400/40 flex items-center justify-center text-purple-300 shadow-md">
+                          <Icon className="w-3.5 h-3.5" />
+                        </div>
+                      </div>
+
+                      <span className={`text-[10px] font-mono font-bold px-2.5 py-1 rounded-full border ${member.badgeColor}`}>
+                        Specialist
+                      </span>
+                    </div>
+
+                    {/* Name & Role */}
+                    <div>
+                      <h3 className="font-syne text-base sm:text-lg font-bold text-white group-hover:text-purple-200 transition-colors">
+                        {member.name}
+                      </h3>
+                      <div className="font-mono text-xs font-semibold text-purple-300 mt-1">
+                        {member.role}
+                      </div>
+                      <p className="text-xs text-slate-300/75 mt-3 leading-relaxed">
+                        {member.description}
+                      </p>
+                    </div>
+
+                    {/* Skill Tags */}
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {member.skills.map((skill, sIdx) => (
+                        <span
+                          key={sIdx}
+                          className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-white/[0.04] text-purple-200/80 border border-purple-500/15"
+                        >
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Card Bottom / Assurance Indicator */}
+                  <div className="pt-4 mt-5 border-t border-purple-500/15 flex items-center justify-between text-xs relative z-10">
+                    <span className="text-[11px] text-purple-300/60 font-semibold font-mono flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block animate-pulse" />
+                      Core Member
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      AuthShield 360
+                    </span>
                   </div>
                 </div>
               );

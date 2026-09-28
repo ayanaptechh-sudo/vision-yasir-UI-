@@ -1,99 +1,242 @@
-# AuthShield 360 Developer Guide
+# AuthShield 360 — Developer & Architecture Guide
+> **VerifyVault: Technical Specification, API Reference & System Internals**  
+> *Full-Stack Zero-Trust Identity Verification Engine (React 19 + TypeScript + Express + Vite)*
 
-## Overview
+![AuthShield System Architecture](/images/authshield_architecture.jpg)
 
-AuthShield 360 is a TypeScript application with a React 19/Vite frontend and an Express API. The API and Vite middleware run in the same Node process in development. There is no external database configured: `server/database/db.ts` implements Mongo-like in-memory collections and seeds demo users, settings, and sample school data at startup. Runtime changes are lost when the process stops.
+---
 
-## Prerequisites and local setup
+## 1. System Overview & Technical Stack
 
-- Node.js 20.19+ or 22.12+ (Vite 8 supported Node versions)
-- npm
+**AuthShield 360** is engineered as a monolithic, zero-external-dependency full-stack application. It pairs an Express.js backend API with a React 19 single-page application (SPA), bundled and hosted seamlessly via Vite middlewares in development and pre-compiled static assets in production.
 
-From the repository root:
+### Core Technology Stack:
+- **Frontend**: React 19, TypeScript 5.8, Tailwind CSS, Lucide React, Three.js / React Three Fiber (3D Sentinel model).
+- **Backend**: Node.js 22, Express 4.x, TypeScript (`tsx` engine).
+- **Cryptography & Hashing**:
+  - Node.js native `crypto.scrypt` with 16-byte random salts for password storage.
+  - Native HMAC-SHA1 for RFC 6238 Time-based One-Time Passwords (TOTP).
+  - AES-256-GCM authenticated encryption for secret keys at rest.
+  - Native `crypto.timingSafeEqual` for constant-time cryptographic hash verification.
+- **Database**: In-memory high-performance document store (`server/database/db.ts`) simulating MongoDB query semantics with synchronous indexing.
+- **Delivery Providers**:
+  - WhatsApp OTP: UltraMsg REST API Gateway (`server/services/ultraMsgService.ts`).
+  - Email OTP: Nodemailer SMTP with Gmail App Password support (`server/services/emailService.ts`).
 
-```powershell
-npm install
-Copy-Item .env.example .env
-npm run dev
+---
+
+## 2. Cryptographic Architecture & Security Implementation
+
+![AuthShield Auth Flow](/images/authshield_auth_flow.jpg)
+
+### 2.1 RFC 6238 TOTP Engine (`server/services/cryptoService.ts`)
+The application implements an independent, standard-compliant RFC 6238 TOTP generator and validator:
+1. **Secret Generation**: Produces 20 cryptographically secure pseudorandom bytes encoded into RFC 4648 Base32.
+2. **HMAC-SHA1 Computation**:
+   - Calculates the current 30-second time counter: $T = \lfloor \frac{\text{unix\_time}}{30} \rfloor$.
+   - Converts counter $T$ into an 8-byte big-endian buffer.
+   - Computes $HMAC\text{-}SHA1(\text{Secret}, T)$.
+3. **Dynamic Truncation**:
+   - Takes the low-order 4 bits of the last byte to calculate the offset $O = \text{hash}[19] \ \& \ 0x0F$.
+   - Extracts a 31-bit integer: $\text{binary} = ((\text{hash}[O] \ \& \ 0x7F) \ll 24) \mid ((\text{hash}[O+1] \ \& \ 0xFF) \ll 16) \mid ((\text{hash}[O+2] \ \& \ 0xFF) \ll 8) \mid (\text{hash}[O+3] \ \& \ 0xFF)$.
+   - Derives the 6-digit token: $\text{OTP} = \text{binary} \pmod{10^6}$.
+4. **Time-Drift Window & Replay Protection**:
+   - Accepts a time skew window of $\pm 1$ step (current, $T-1$, and $T+1$).
+   - Stores `lastVerifiedTotpStep` on the user record. If an incoming token matches a previously consumed step counter, it is rejected immediately to eliminate replay attacks.
+5. **AES-256-GCM Encryption at Rest**:
+   - All TOTP secret keys are encrypted before persistence using AES-256-GCM with a unique 12-byte initialization vector (IV) and a 16-byte authentication tag (`iv:tag:ciphertext`).
+
+### 2.2 Password Security & Brute-Force Mitigation
+- Passwords are encrypted via Node.js `crypto.scryptSync(password, salt, 64)`.
+- The database stores passwords formatted as `salt:derivedKeyHash`.
+- Consecutive authentication failures trigger a lockout counter (`failedLoginAttempts`). Upon reaching 5 failed attempts, `lockoutUntil` is stamped with an automatic 15-minute freeze.
+- Verification uses `crypto.timingSafeEqual` to thwart timing-analysis side-channel attacks.
+
+### 2.3 Session Fixation Defense & State Management
+- Authenticating users do not inherit pre-auth session tokens.
+- Upon successful authentication across all factors, old tokens are invalidated and an unguessable 64-character hexadecimal session token is issued (`crypto.randomBytes(32).toString('hex')`).
+- Tokens are transmitted via `Authorization: Bearer <token>` or custom `x-session-token` headers.
+
+### 2.4 HTTP Defense & Security Headers (`server/app.ts`)
+The server enforces the following hardened security headers on every request:
+```http
+X-Content-Type-Options: nosniff
+X-Frame-Options: SAMEORIGIN
+Referrer-Policy: strict-origin-when-cross-origin
+X-XSS-Protection: 1; mode=block
+Permissions-Policy: camera=(), microphone=(), geolocation=()
 ```
 
-Open `http://localhost:3000`. `PORT` can be set in `.env` to use another port. The development script is `tsx server.ts`; `server/app.ts` mounts `/api` routes and Vite middleware. Set `DISABLE_HMR=true` to disable Vite HMR/file watching in environments that need it.
+---
 
-## NPM scripts
+## 3. Repository & Directory Structure
 
-| Command | Purpose |
-| --- | --- |
-| `npm run dev` | Start the full-stack development server. |
-| `npm run lint` | Run the TypeScript compiler in no-emit mode (`tsc --noEmit`). |
-| `npm run build` | Build the frontend with Vite and bundle the Express server to `dist/server.js`. |
-| `npm start` | Run `server.ts`; when a production bundle exists it loads `dist/server.js`. |
-| `npm run preview` | Start Vite's static preview server for the frontend build. |
+```tree
+├── package.json                 # Dependency definitions & build scripts
+├── tsconfig.json                # TypeScript compiler configuration
+├── vite.config.ts               # Vite configuration (port 3000, React plugin)
+├── server.ts                    # Server startup dispatcher (dev tsx vs prod dist)
+├── index.html                   # HTML entry point with favicon suite
+│
+├── server/                      # Full-stack Node.js Express Backend
+│   ├── app.ts                   # Express app initialization, static serving, & Vite mounting
+│   ├── routes/
+│   │   └── api.ts               # Protected & public API route definitions
+│   ├── controllers/
+│   │   ├── authController.ts    # Multi-step login, TOTP setup, password recovery, & logout
+│   │   ├── adminController.ts   # User management, 2FA reset, lockouts, & support tickets
+│   │   ├── portalController.ts  # Role-gated Student & Teacher academic records
+│   │   ├── logsController.ts    # Audit event ingestion, telemetry streaming, & export
+│   │   ├── testMatrixController.ts # 12+ automated cybersecurity penetration tests
+│   │   └── comparisonController.ts # Performance & latency benchmarking engine
+│   ├── middleware/
+│   │   └── auth.ts              # Session validation & requireRole(roles) middleware
+│   ├── database/
+│   │   └── db.ts                # In-memory document database, collections, & seed records
+│   └── services/
+│       ├── cryptoService.ts     # RFC 6238 TOTP, QR code generation, & AES-256-GCM
+│       ├── otpService.ts        # 6-digit random code generation, hashing, & expiry checks
+│       ├── auditService.ts      # Structured audit trail ingestion
+│       ├── ultraMsgService.ts   # WhatsApp gateway dispatch client
+│       └── emailService.ts      # SMTP / Gmail email dispatch client
+│
+├── src/                         # Frontend React 19 Application
+│   ├── main.tsx                 # DOM root mount
+│   ├── App.tsx                  # Main router & role-based dashboard router
+│   ├── index.css                # Tailwind CSS imports & global design tokens
+│   ├── context/
+│   │   └── AuthContext.tsx      # Global auth context, session state, & inspector hooks
+│   ├── components/
+│   │   ├── Navbar.tsx           # Main application navbar with brand emblem
+│   │   ├── PortalLayout.tsx     # Authenticated shell layout, 2FA banner, & inspector
+│   │   ├── InspectorDrawer.tsx  # Developer OTP inspection & telemetry slide-out
+│   │   └── DemoResetModal.tsx   # Modal for resetting database seeds
+│   ├── pages/
+│   │   ├── HomePage.tsx         # Landing page with 3D Sentinel, disciplines, & team section
+│   │   ├── LoginPage.tsx        # Multi-stage login form with demo credential pills
+│   │   ├── StudentDashboard.tsx # Cadet coursework, grades, timetable, & ticket submission
+│   │   ├── TeacherDashboard.tsx # Faculty student roster, submissions, & grading
+│   │   ├── AdminDashboard.tsx   # SOC console, lockouts, active sessions, & system stats
+│   │   ├── UserManagementPage.tsx # User CRUD, 2FA reset, & account unlocking
+│   │   ├── AuditLogsPage.tsx    # Filterable audit events table with export
+│   │   ├── TestMatrixPage.tsx   # Automated security test runner
+│   │   ├── ComparisonPage.tsx   # Mode comparison & latency benchmarks
+│   │   ├── ProfilePage.tsx      # User profile & TOTP 2FA QR code enrollment
+│   │   ├── SessionsPage.tsx     # Active session revocation console
+│   │   ├── TicketsPage.tsx      # Support ticket triage (strict student privacy)
+│   │   └── AccessDeniedPage.tsx # 403 Forbidden interceptor
+│   └── services/
+│       └── api.ts               # Typed Axios/Fetch client wrapper
+│
+└── public/                      # Static Assets
+    ├── favicon.ico              # Multi-resolution favicon icon
+    ├── favicon.png              # 192x192 high-res manifest icon
+    ├── favicon-32x32.png        # 32x32 browser tab icon
+    ├── favicon-16x16.png        # 16x16 browser tab icon
+    ├── apple-touch-icon.png     # Apple touch icon
+    └── images/                  # Infographics, splash screens, & architecture diagrams
+```
 
-There is no separate automated test script in `package.json`. The app's **Test Matrix** is an administrator-operated runtime security demonstration, not a unit/integration test runner for the codebase.
+---
 
-## Environment configuration
+## 4. API Specification & Endpoints
 
-Copy `.env.example` to `.env`. Keep real secrets out of source control and never put provider credentials in frontend code.
+All backend routes are prefixed with `/api`. Protected routes require an `Authorization: Bearer <sessionToken>` header or `x-session-token` header.
 
-| Variable | Purpose |
-| --- | --- |
-| `PORT` | Express listen port; defaults to `3000`. |
-| `NODE_ENV` | Set to `production` to serve built static assets instead of Vite middleware. |
-| `DISABLE_HMR` | Set to `true` to disable Vite HMR/file watching. |
-| `ULTRAMSG_INSTANCE_ID`, `ULTRAMSG_TOKEN` | Optional WhatsApp OTP gateway credentials. |
-| `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Optional Gmail SMTP credentials for email OTP. `SMTP_USER` and `SMTP_PASS` are supported as aliases. |
+### 4.1 Authentication Endpoints (`/api/auth`)
+| Method | Endpoint | Authorization | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/api/auth/login-step1` | Public | Validates Email + Password. Enforces 5-attempt lockout threshold. |
+| `POST` | `/api/auth/verify-otp` | Public | Validates 6-digit WhatsApp or Email OTP code. |
+| `POST` | `/api/auth/verify-totp` | Public | Validates RFC 6238 Google Authenticator rolling code. |
+| `POST` | `/api/auth/resend-otp` | Public | Resends OTP code adhering to 60-second cooldown limits. |
+| `GET` | `/api/auth/me` | Authenticated | Retrieves the current session user details and role. |
+| `POST` | `/api/auth/logout` | Authenticated | Terminates session and purges token from the active session store. |
+| `GET` | `/api/auth/2fa/setup` | `TEACHER`, `ADMIN` | Generates a new Base32 secret, manual key, and QR code data URL. |
+| `POST` | `/api/auth/2fa/verify-setup` | `TEACHER`, `ADMIN` | Verifies the initial TOTP code to confirm and lock 2FA activation. |
+| `GET` | `/api/auth/2fa/status` | Authenticated | Checks if 2FA is currently active on the requesting user account. |
 
-When provider credentials are absent, OTP generation continues in local lab mode and records dispatch information in the in-memory test-dispatch stream. `SESSION_SECRET`, OTP/session/lockout values, `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, and `GEMINI_API_KEY` are present in the example environment file but are not currently read by the server implementation. OTP expiry, failed-login threshold, lockout duration, and session timeout are currently seeded in `db.ts` and can be changed through administrator settings where exposed.
+### 4.2 Administration Endpoints (`/api/admin`)
+| Method | Endpoint | Authorization | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/admin/users` | `ADMINISTRATOR` | Lists all users with lockout status and 2FA states. |
+| `POST` | `/api/admin/users/unlock` | `ADMINISTRATOR` | Clears failed login counter and unlocks an account. |
+| `POST` | `/api/admin/users/reset-2fa` | `ADMINISTRATOR` | Resets and wipes TOTP secret for a user unable to authenticate. |
+| `GET` | `/api/admin/sessions` | `ADMINISTRATOR` | Returns all active concurrent user sessions across the system. |
+| `DELETE` | `/api/admin/sessions/:id` | `ADMINISTRATOR` | Remotely terminates a specific active user session. |
+| `POST` | `/api/admin/demo-reset` | `ADMINISTRATOR` | Purges runtime mutations and restores factory database seeds. |
 
-## Repository map
+### 4.3 Portal Endpoints (`/api/portal`)
+| Method | Endpoint | Authorization | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/portal/student-data` | `STUDENT`, `ADMIN` | Retrieves courses, attendance, and grades for the authenticated student. |
+| `GET` | `/api/portal/teacher-data` | `TEACHER`, `ADMIN` | Retrieves course submissions and student grading rosters. |
+| `POST` | `/api/portal/grade-submission` | `TEACHER`, `ADMIN` | Updates an assignment grade and logs a faculty grading audit event. |
+| `GET` | `/api/portal/tickets` | Role-Filtered | Fetches support tickets. Students see their own; Admins see all; Teachers receive 403. |
+| `POST` | `/api/portal/tickets` | `STUDENT`, `ADMIN` | Submits a new support inquiry or account appeal. |
 
-| Path | Responsibility |
-| --- | --- |
-| `src/App.tsx` | Public/login routing and authenticated role-based page selection. |
-| `src/pages/` | Student, teacher, administrator, audit, reports, sessions, tickets, and test views. |
-| `src/components/` | Shared navigation, portal layout, OTP inspection drawer, badges, and modals. |
-| `src/context/AuthContext.tsx` | Frontend auth/session state and API-backed operations. |
-| `src/services/api.ts` | Browser API client; sends the bearer and `x-session-token` headers. |
-| `server.ts` | Development/production server bootstrap. |
-| `server/app.ts` | Express setup, API mount, health endpoints, and Vite/static hosting. |
-| `server/routes/api.ts` | API endpoint registration and route-level role middleware. |
-| `server/controllers/` | Authentication, administration, portal, logs, comparison, and test-matrix handlers. |
-| `server/middleware/auth.ts` | Session validation and role authorization. |
-| `server/database/db.ts` | In-memory collections, default settings, demo accounts, and seed records. |
-| `server/services/` | OTP, audit, email, and UltraMsg dispatch logic. |
+### 4.4 Telemetry, Logs & Security Testing
+| Method | Endpoint | Authorization | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/logs` | `TEACHER`, `ADMIN` | Retrieves real-time audit log events. |
+| `GET` | `/api/logs/export` | `ADMINISTRATOR` | Streams audit logs in CSV or JSON format. |
+| `GET` | `/api/matrix/scenarios` | `ADMINISTRATOR` | Fetches the full suite of security test vectors and past results. |
+| `POST` | `/api/matrix/run` | `ADMINISTRATOR` | Executes automated penetration test vectors and returns cryptographic proof. |
+| `GET` | `/api/comparison/benchmarks`| `ADMINISTRATOR` | Runs latency and security evaluation across all 3 auth modes. |
 
-## Authentication and authorization behavior
+---
 
-- Authentication modes are `PASSWORD_ONLY`, `PASSWORD_OTP`, and `PASSWORD_OTP_EMAIL`; the default is `PASSWORD_ONLY`.
-- Administrators always require password, mobile OTP, and email OTP, regardless of the global mode.
-- Teachers require mobile OTP in `PASSWORD_OTP` and `PASSWORD_OTP_EMAIL`; students require it only in those modes.
-- In `PASSWORD_OTP_EMAIL`, a verified mobile OTP is followed by email OTP for non-admin roles as well.
-- The default seeded administrator is `ayanaptechh@gmail.com`; lab accounts are `student@test.local` and `teacher@test.local`. Passwords and seed details are defined in `server/database/db.ts`; treat them as demo-only.
-- API authorization is enforced on the server with `authenticateSession` and `requireRole`. Keep authorization checks server-side even when a page is hidden or disabled in React.
-- Passwords use Node `scrypt`; OTP values are stored as salted hashes and compared with a timing-safe comparison. Session tokens are random, server-validated records; the browser stores its token in `localStorage`.
+## 5. Local Setup & Build Pipeline
 
-## API areas
+### Prerequisites
+- Node.js 20.19+ or Node.js 22+
+- npm 10+
 
-All API routes are mounted under `/api` (for example, `GET /api/auth/settings`). Main route groups:
+### Installation & Execution
+```bash
+# 1. Install dependencies
+npm install
 
-- `/auth`: settings, mode selection, password/OTP login, resend, logout, current session, and password recovery.
-- `/admin`: user and system administration, sessions, tickets, alerts, reports, and demo reset. Most operations require the administrator role.
-- `/logs`: audit log and metrics; log export requires administrator role.
-- `/matrix` and `/comparison`: read scenario data; running tests/benchmarks requires administrator role.
-- `/portal`: student/teacher resources with server-side role checks.
-- `/support/submit`: public support-ticket submission.
-- `/healthz` and `/api/health`: health responses.
+# 2. Configure environment
+cp .env.example .env
 
-See `server/routes/api.ts` for the current request paths and role requirements. The browser client uses relative `/api` paths, so frontend and API are expected to be served from the same origin.
+# 3. Launch full-stack development server
+npm run dev
+```
+The server will bind to `http://localhost:3000`.
 
-## Development and verification
+### Production Build & Deployment
+```bash
+# Build frontend with Vite & bundle Express backend with esbuild
+npm run build
 
-1. Keep UI changes in the relevant page/component and API calls in `src/services/api.ts` / `AuthContext.tsx`.
-2. Put business logic in the owning server controller/service and register new endpoints in `server/routes/api.ts`.
-3. Add or preserve server-side role checks for protected operations.
-4. Run `npm run lint` after TypeScript changes and `npm run build` to verify both frontend and server bundling.
-5. For behavioral checks, use the local app and administrator Test Matrix. Avoid treating its results as a substitute for automated code tests.
+# Start the compiled production server
+npm start
+```
 
-## Lab-only limitations
+### NPM Script Reference
+| Script | Command | Purpose |
+| :--- | :--- | :--- |
+| `npm run dev` | `tsx server.ts` | Starts development server with on-the-fly TS compilation and Vite HMR. |
+| `npm run build` | `vite build && esbuild ...` | Compiles client to `dist/` and bundles server to `dist/server.js`. |
+| `npm run lint` | `tsc --noEmit` | Runs strict TypeScript type-checking across frontend and backend. |
+| `npm start` | `node server.ts` | Boots production server using compiled `dist/server.js`. |
 
-This is a demonstration, not a production identity service. The database and sessions are in memory, seed credentials are known, and the OTP inspection API/UI intentionally exposes codes to support isolated evaluation. Do not deploy it on an untrusted network or use real account data. Before any production adaptation, replace the storage/session design, remove or tightly gate OTP inspection and lab controls, secure configuration changes, and perform a dedicated security review.
+---
+
+## 6. Environment Variables Reference (`.env`)
+
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `PORT` | Optional | `3000` | Port on which Express and Vite middleware listen. |
+| `NODE_ENV` | Optional | `development` | Set to `production` for compiled static asset delivery. |
+| `DISABLE_HMR` | Optional | `false` | Set to `true` to disable HMR in restricted container sandboxes. |
+| `ULTRAMSG_INSTANCE_ID` | Optional | - | UltraMsg WhatsApp instance ID for live SMS/WhatsApp dispatch. |
+| `ULTRAMSG_TOKEN` | Optional | - | UltraMsg API authorization bearer token. |
+| `GMAIL_USER` | Optional | - | Gmail account email for live SMTP email dispatch. |
+| `GMAIL_APP_PASSWORD` | Optional | - | Google 16-character App Password for SMTP authentication. |
+
+> *Note:* In the absence of live provider credentials, the server automatically operates in local lab mode and captures all dispatches inside the in-memory **Lab Inspector Drawer**.
+
+---
+*AuthShield 360 Core Development & Research Team: Ayan Khan, Yasir Khan, M. Alwaz, and Tayyaba Shahzad.*

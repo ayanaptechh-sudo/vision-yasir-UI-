@@ -16,8 +16,6 @@ import {
   GraduationCap,
   BookOpen,
   Sparkles,
-  Sun,
-  Moon,
   Eye,
   EyeOff,
   MessageSquare,
@@ -39,8 +37,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onBackToHo
     resendOtp,
     expireOtpForTest,
     settings,
-    theme,
-    toggleTheme,
   } = useAuth();
 
   // Steps: 'CREDENTIALS' | 'MOBILE_OTP' | 'EMAIL_OTP' | 'TOTP' | 'TOTP_SETUP'
@@ -354,24 +350,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess, onBackToHo
             Identity Security
           </div>
         </div>
-      </button>
-
-      {/* THEME */}
-      <button
-        onClick={toggleTheme}
-        className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/[0.03] border border-white/10 hover:border-purple-500/40 hover:bg-purple-500/5 text-xs text-slate-300 transition-all"
-      >
-        {theme === 'dark' ? (
-          <>
-            <Sun className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden sm:inline">Light Mode</span>
-          </>
-        ) : (
-          <>
-            <Moon className="w-3.5 h-3.5 text-purple-400" />
-            <span className="hidden sm:inline">Dark Mode</span>
-          </>
-        )}
       </button>
     </header>
 
