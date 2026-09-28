@@ -192,15 +192,66 @@ export interface SystemSettingsDoc extends Document {
   requireRiskVerification: boolean;
 }
 
-// In-Memory & File-Backed Storage implementing MongoDB query semantics
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+// Persistent File-Backed Storage implementing MongoDB query semantics
 class Collection<T extends Document> {
   private items: Map<string, T> = new Map();
+  private filePath: string;
 
-  constructor(private name: string) {}
+  constructor(private name: string) {
+    this.filePath = path.join(DATA_DIR, `${this.name}.json`);
+    this.loadFromDisk();
+  }
+
+  private loadFromDisk(): void {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      if (fs.existsSync(this.filePath)) {
+        const raw = fs.readFileSync(this.filePath, 'utf-8');
+        if (raw.trim().length > 0) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            this.items.clear();
+            for (const doc of parsed) {
+              if (doc && doc._id) {
+                this.items.set(doc._id, doc);
+              }
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(`[Database] Error loading collection '${this.name}' from ${this.filePath}:`, err);
+      throw new Error(`CRITICAL: Failed to load persistent collection '${this.name}' from storage: ${err.message}`);
+    }
+  }
+
+  public saveToDisk(): void {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const data = Array.from(this.items.values());
+      const serialized = JSON.stringify(data, null, 2);
+      const tempPath = `${this.filePath}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`;
+      fs.writeFileSync(tempPath, serialized, 'utf-8');
+      fs.renameSync(tempPath, this.filePath);
+    } catch (err: any) {
+      console.error(`[Database] Error saving collection '${this.name}' to disk:`, err);
+      throw new Error(`CRITICAL: Failed to persist collection '${this.name}' to disk: ${err.message}`);
+    }
+  }
 
   public load(docs: T[]) {
     this.items.clear();
     docs.forEach(doc => this.items.set(doc._id, doc));
+    this.saveToDisk();
   }
 
   public getAll(): T[] {
@@ -259,15 +310,26 @@ class Collection<T extends Document> {
     } as T;
 
     this.items.set(_id, newDoc);
+    this.saveToDisk();
     return JSON.parse(JSON.stringify(newDoc));
   }
 
   public async insertMany(docs: Array<Omit<T, '_id' | 'createdAt' | 'updatedAt'> & Partial<Document>>): Promise<T[]> {
     const results: T[] = [];
+    const now = new Date().toISOString();
     for (const d of docs) {
-      results.push(await this.insertOne(d));
+      const _id = d._id || crypto.randomUUID();
+      const newDoc = {
+        ...d,
+        _id,
+        createdAt: d.createdAt || now,
+        updatedAt: now,
+      } as T;
+      this.items.set(_id, newDoc);
+      results.push(newDoc);
     }
-    return results;
+    this.saveToDisk();
+    return JSON.parse(JSON.stringify(results));
   }
 
   public async updateOne(
@@ -294,25 +356,32 @@ class Collection<T extends Document> {
     }
 
     target.updatedAt = now;
+    this.saveToDisk();
     return true;
   }
 
   public async deleteOne(filter: Partial<T> | ((item: T) => boolean)): Promise<boolean> {
     const existing = await this.findOne(filter);
     if (!existing) return false;
-    return this.items.delete(existing._id);
+    const deleted = this.items.delete(existing._id);
+    if (deleted) this.saveToDisk();
+    return deleted;
   }
 
   public async deleteMany(filter?: Partial<T> | ((item: T) => boolean)): Promise<number> {
     if (!filter) {
       const count = this.items.size;
       this.items.clear();
+      this.saveToDisk();
       return count;
     }
 
     const matches = await this.find(filter);
     for (const m of matches) {
       this.items.delete(m._id);
+    }
+    if (matches.length > 0) {
+      this.saveToDisk();
     }
     return matches.length;
   }
@@ -362,230 +431,244 @@ export class Database {
   public system_settings = new Collection<SystemSettingsDoc>('system_settings');
 
   constructor() {
-    this.seedDefaultData();
+    this.init();
+  }
+
+  public init() {
+    const isColdStart = this.users.getAll().length === 0;
+    if (isColdStart) {
+      console.log(`[Database] Cold start detected: Initializing persistent default datasets in ${DATA_DIR}...`);
+      this.seedDefaultData(false);
+    } else {
+      console.log(`[Database] Loaded persistent database successfully from ${DATA_DIR}. Total accounts: ${this.users.getAll().length}`);
+    }
   }
 
   public seedDefaultData(force: boolean = false) {
-    // Clear collections
-    this.users.deleteMany();
-    this.sessions.deleteMany();
-    this.otp_records.deleteMany();
-    this.authentication_logs.deleteMany();
-    this.security_events.deleteMany();
-    this.security_alerts.deleteMany();
-    this.support_tickets.deleteMany();
-    this.test_matrix.deleteMany();
-    this.test_runs.deleteMany();
-    this.school_records.deleteMany();
-    this.assignments.deleteMany();
-    this.exam_results.deleteMany();
-    this.system_settings.deleteMany();
+    if (force) {
+      // Clear collections ONLY when explicit admin reset is requested
+      this.users.deleteMany();
+      this.sessions.deleteMany();
+      this.otp_records.deleteMany();
+      this.authentication_logs.deleteMany();
+      this.security_events.deleteMany();
+      this.security_alerts.deleteMany();
+      this.support_tickets.deleteMany();
+      this.test_matrix.deleteMany();
+      this.test_runs.deleteMany();
+      this.school_records.deleteMany();
+      this.assignments.deleteMany();
+      this.exam_results.deleteMany();
+      this.system_settings.deleteMany();
+    }
 
     // Default system settings
-    this.system_settings.insertOne({
-      key: 'GLOBAL_SETTINGS',
-      activeAuthMode: 'PASSWORD_ONLY', // Default baseline scenario for SRS comparative analysis
-      maxFailedAttempts: 5,
-      lockoutDurationMinutes: 5,
-      otpExpirySeconds: 300, // 5 minutes default
-      emailOtpExpirySeconds: 300, // 5 minutes default
-      sessionTimeoutMinutes: 30,
-      requireRiskVerification: false,
-    });
+    if (force || this.system_settings.getAll().length === 0) {
+      this.system_settings.insertOne({
+        key: 'GLOBAL_SETTINGS',
+        activeAuthMode: 'PASSWORD_ONLY', // Default baseline scenario for SRS comparative analysis
+        maxFailedAttempts: 5,
+        lockoutDurationMinutes: 5,
+        otpExpirySeconds: 300, // 5 minutes default
+        emailOtpExpirySeconds: 300, // 5 minutes default
+        sessionTimeoutMinutes: 30,
+        requireRiskVerification: false,
+      });
+    }
 
-    // =========================================================================
-    // 1. INITIAL PRIMARY ADMINISTRATOR (Per Requirement #1):
-    // Name: Ayan
-    // Email: ayanaptechh@gmail.com
-    // Password: Techwiz2254@
-    // WhatsApp: +923709001226
-    // =========================================================================
-    const initialAdminPass = hashPassword('Techwiz2254@');
-    this.users.insertOne({
-      email: 'ayanaptechh@gmail.com',
-      name: 'Ayan',
-      role: 'ADMINISTRATOR',
-      passwordHash: initialAdminPass.hash,
-      passwordSalt: initialAdminPass.salt,
-      status: 'ACTIVE',
-      failedLoginAttempts: 0,
-      lockoutUntil: null,
-      mfaEnabled: true,
-      twoFactorEnabled: false,
-      failedTotpAttempts: 0,
-      phoneNumber: '+923709001226',
-      phoneNumberMasked: '+92 370 •••1226',
-      department: 'Security Operations & Identity Administration',
-      isTestAccount: false,
-    });
+    if (force || this.users.getAll().length === 0) {
+      const initialAdminPass = hashPassword('Techwiz2254@');
+      this.users.insertOne({
+        email: 'ayanaptechh@gmail.com',
+        name: 'Ayan',
+        role: 'ADMINISTRATOR',
+        passwordHash: initialAdminPass.hash,
+        passwordSalt: initialAdminPass.salt,
+        status: 'ACTIVE',
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
+        mfaEnabled: true,
+        twoFactorEnabled: false,
+        failedTotpAttempts: 0,
+        phoneNumber: '+923709001226',
+        phoneNumberMasked: '+92 370 •••1226',
+        department: 'Security Operations & Identity Administration',
+        isTestAccount: false,
+      });
 
-    // =========================================================================
-    // 2. DEMO / TEST ACCOUNTS (Clearly separated from Real Initial Admin):
-    // Test Student & Test Teacher for educational evaluation and lab repeatability
-    // =========================================================================
-    const studentPass = hashPassword('Student@123');
-    this.users.insertOne({
-      email: 'student@test.local',
-      name: 'Alex Rivera [Lab Demo Student]',
-      role: 'STUDENT',
-      passwordHash: studentPass.hash,
-      passwordSalt: studentPass.salt,
-      status: 'ACTIVE',
-      failedLoginAttempts: 0,
-      lockoutUntil: null,
-      mfaEnabled: false,
-      twoFactorEnabled: false,
-      phoneNumber: '+15550194821',
-      phoneNumberMasked: '+1 (555) •••-4821',
-      studentId: 'STU-DEMO-9041',
-      department: 'Cybersecurity & Information Assurance',
-      isTestAccount: true,
-    });
+      const studentPass = hashPassword('Student@123');
+      this.users.insertOne({
+        email: 'student@test.local',
+        name: 'Alex Rivera [Lab Demo Student]',
+        role: 'STUDENT',
+        passwordHash: studentPass.hash,
+        passwordSalt: studentPass.salt,
+        status: 'ACTIVE',
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
+        mfaEnabled: false,
+        twoFactorEnabled: false,
+        phoneNumber: '+15550194821',
+        phoneNumberMasked: '+1 (555) •••-4821',
+        studentId: 'STU-DEMO-9041',
+        department: 'Cybersecurity & Information Assurance',
+        isTestAccount: true,
+      });
 
-    const teacherPass = hashPassword('Teacher@123');
-    this.users.insertOne({
-      email: 'teacher@test.local',
-      name: 'Prof. Marcus Vance [Lab Demo Faculty]',
-      role: 'TEACHER',
-      passwordHash: teacherPass.hash,
-      passwordSalt: teacherPass.salt,
-      status: 'ACTIVE',
-      failedLoginAttempts: 0,
-      lockoutUntil: null,
-      mfaEnabled: true,
-      twoFactorEnabled: false,
-      failedTotpAttempts: 0,
-      phoneNumber: '+15550197390',
-      phoneNumberMasked: '+1 (555) •••-7390',
-      teacherId: 'FAC-DEMO-1082',
-      department: 'Network Defense & Cryptography',
-      isTestAccount: true,
-    });
+      const teacherPass = hashPassword('Teacher@123');
+      this.users.insertOne({
+        email: 'teacher@test.local',
+        name: 'Prof. Marcus Vance [Lab Demo Faculty]',
+        role: 'TEACHER',
+        passwordHash: teacherPass.hash,
+        passwordSalt: teacherPass.salt,
+        status: 'ACTIVE',
+        failedLoginAttempts: 0,
+        lockoutUntil: null,
+        mfaEnabled: true,
+        twoFactorEnabled: false,
+        failedTotpAttempts: 0,
+        phoneNumber: '+15550197390',
+        phoneNumberMasked: '+1 (555) •••-7390',
+        teacherId: 'FAC-DEMO-1082',
+        department: 'Network Defense & Cryptography',
+        isTestAccount: true,
+      });
+    }
 
     // Seed initial support ticket samples
-    this.support_tickets.insertMany([
-      {
-        ticketNumber: 'TKT-1001',
-        email: 'student@test.local',
-        name: 'Alex Rivera',
-        role: 'STUDENT',
-        category: 'ACCOUNT_LOCKED',
-        subject: 'Account unlocked inquiry after lab simulation',
-        message: 'I was testing consecutive failed passwords in Lab T07 and hit the 5-attempt limit. Requesting confirmation of reset.',
-        status: 'COMPLETED',
-        adminReply: 'Account lockout threshold verified. Account has been automatically restored.',
-        resolvedAt: new Date().toISOString(),
-      },
-      {
-        ticketNumber: 'TKT-1002',
-        email: 'teacher@test.local',
-        name: 'Prof. Marcus Vance',
-        role: 'TEACHER',
-        category: 'MFA_ISSUE',
-        subject: 'WhatsApp OTP Delivery Verification',
-        message: 'Verifying UltraMsg WhatsApp dispatch channel for faculty authentication. Gateway operational.',
-        status: 'IN_PROGRESS',
-        adminReply: 'UltraMsg out-of-band mobile delivery route is active.',
-      },
-    ]);
+    if (force || this.support_tickets.getAll().length === 0) {
+      this.support_tickets.insertMany([
+        {
+          ticketNumber: 'TKT-1001',
+          email: 'student@test.local',
+          name: 'Alex Rivera',
+          role: 'STUDENT',
+          category: 'ACCOUNT_LOCKED',
+          subject: 'Account unlocked inquiry after lab simulation',
+          message: 'I was testing consecutive failed passwords in Lab T07 and hit the 5-attempt limit. Requesting confirmation of reset.',
+          status: 'COMPLETED',
+          adminReply: 'Account lockout threshold verified. Account has been automatically restored.',
+          resolvedAt: new Date().toISOString(),
+        },
+        {
+          ticketNumber: 'TKT-1002',
+          email: 'teacher@test.local',
+          name: 'Prof. Marcus Vance',
+          role: 'TEACHER',
+          category: 'MFA_ISSUE',
+          subject: 'WhatsApp OTP Delivery Verification',
+          message: 'Verifying UltraMsg WhatsApp dispatch channel for faculty authentication. Gateway operational.',
+          status: 'IN_PROGRESS',
+          adminReply: 'UltraMsg out-of-band mobile delivery route is active.',
+        },
+      ]);
+    }
 
     // Seed dummy school records
-    this.school_records.insertOne({
-      studentId: 'STU-DEMO-9041',
-      studentEmail: 'student@test.local',
-      fullName: 'Alex Rivera',
-      gradeLevel: 'Senior Undergraduate',
-      gpa: 3.88,
-      attendanceRate: 97.4,
-      major: 'B.S. Cybersecurity Defense',
-      advisor: 'Prof. Marcus Vance',
-    });
+    if (force || this.school_records.getAll().length === 0) {
+      this.school_records.insertOne({
+        studentId: 'STU-DEMO-9041',
+        studentEmail: 'student@test.local',
+        fullName: 'Alex Rivera',
+        gradeLevel: 'Senior Undergraduate',
+        gpa: 3.88,
+        attendanceRate: 97.4,
+        major: 'B.S. Cybersecurity Defense',
+        advisor: 'Prof. Marcus Vance',
+      });
+    }
 
     // Seed dummy assignments
-    this.assignments.insertMany([
-      {
-        title: 'Lab 01: Wireshark Packet Inspection & Auth Capture',
-        courseCode: 'SEC-301',
-        courseName: 'Network Security Fundamentals',
-        instructor: 'Prof. Marcus Vance',
-        dueDate: '2026-10-15',
-        status: 'GRADED',
-        grade: 'A',
-        score: 98,
-        maxScore: 100,
-        description: 'Analyze cleartext HTTP credentials vs encrypted TLS sessions and examine payload exposure.',
-      },
-      {
-        title: 'Lab 02: TOTP RFC 6238 Algorithm Simulation',
-        courseCode: 'SEC-410',
-        courseName: 'Modern Identity & Authentication',
-        instructor: 'Prof. Marcus Vance',
-        dueDate: '2026-10-22',
-        status: 'SUBMITTED',
-        maxScore: 100,
-        description: 'Implement HMAC-SHA1 time-step truncation to generate 6-digit rolling authentication tokens.',
-      },
-      {
-        title: 'Lab 03: Exploiting Broken Object Level Authorization (BOLA)',
-        courseCode: 'SEC-450',
-        courseName: 'Ethical Hacking & Penetration Testing',
-        instructor: 'Dr. Evelyn Sterling',
-        dueDate: '2026-11-05',
-        status: 'PENDING',
-        maxScore: 100,
-        description: 'Demonstrate privilege escalation and API resource bypass when RBAC lacks backend verification.',
-      },
-      {
-        title: 'Midterm Research: Password Spraying vs MFA Resistance',
-        courseCode: 'SEC-410',
-        courseName: 'Modern Identity & Authentication',
-        instructor: 'Prof. Marcus Vance',
-        dueDate: '2026-11-18',
-        status: 'PENDING',
-        maxScore: 150,
-        description: 'Empirical comparison paper showing credential stuffing efficacy across single vs multi-factor realms.',
-      }
-    ]);
+    if (force || this.assignments.getAll().length === 0) {
+      this.assignments.insertMany([
+        {
+          title: 'Lab 01: Wireshark Packet Inspection & Auth Capture',
+          courseCode: 'SEC-301',
+          courseName: 'Network Security Fundamentals',
+          instructor: 'Prof. Marcus Vance',
+          dueDate: '2026-10-15',
+          status: 'GRADED',
+          grade: 'A',
+          score: 98,
+          maxScore: 100,
+          description: 'Analyze cleartext HTTP credentials vs encrypted TLS sessions and examine payload exposure.',
+        },
+        {
+          title: 'Lab 02: TOTP RFC 6238 Algorithm Simulation',
+          courseCode: 'SEC-410',
+          courseName: 'Modern Identity & Authentication',
+          instructor: 'Prof. Marcus Vance',
+          dueDate: '2026-10-22',
+          status: 'SUBMITTED',
+          maxScore: 100,
+          description: 'Implement HMAC-SHA1 time-step truncation to generate 6-digit rolling authentication tokens.',
+        },
+        {
+          title: 'Lab 03: Exploiting Broken Object Level Authorization (BOLA)',
+          courseCode: 'SEC-450',
+          courseName: 'Ethical Hacking & Penetration Testing',
+          instructor: 'Dr. Evelyn Sterling',
+          dueDate: '2026-11-05',
+          status: 'PENDING',
+          maxScore: 100,
+          description: 'Demonstrate privilege escalation and API resource bypass when RBAC lacks backend verification.',
+        },
+        {
+          title: 'Midterm Research: Password Spraying vs MFA Resistance',
+          courseCode: 'SEC-410',
+          courseName: 'Modern Identity & Authentication',
+          instructor: 'Prof. Marcus Vance',
+          dueDate: '2026-11-18',
+          status: 'PENDING',
+          maxScore: 150,
+          description: 'Empirical comparison paper showing credential stuffing efficacy across single vs multi-factor realms.',
+        }
+      ]);
+    }
 
     // Seed exam results
-    this.exam_results.insertMany([
-      {
-        studentEmail: 'student@test.local',
-        courseCode: 'SEC-301',
-        courseName: 'Network Security Fundamentals',
-        examName: 'Midterm Practical Exam',
-        date: '2026-03-12',
-        score: 95,
-        grade: 'A',
-        status: 'PASSED',
-        percentile: 94,
-      },
-      {
-        studentEmail: 'student@test.local',
-        courseCode: 'SEC-320',
-        courseName: 'Applied Cryptography',
-        examName: 'Final Exam - Public Key Infrastructure',
-        date: '2026-05-20',
-        score: 91,
-        grade: 'A-',
-        status: 'PASSED',
-        percentile: 89,
-      },
-      {
-        studentEmail: 'student@test.local',
-        courseCode: 'SEC-410',
-        courseName: 'Modern Identity & Authentication',
-        examName: 'MFA Architecture Assessment',
-        date: '2026-09-10',
-        score: 97,
-        grade: 'A+',
-        status: 'PASSED',
-        percentile: 98,
-      }
-    ]);
+    if (force || this.exam_results.getAll().length === 0) {
+      this.exam_results.insertMany([
+        {
+          studentEmail: 'student@test.local',
+          courseCode: 'SEC-301',
+          courseName: 'Network Security Fundamentals',
+          examName: 'Midterm Practical Exam',
+          date: '2026-03-12',
+          score: 95,
+          grade: 'A',
+          status: 'PASSED',
+          percentile: 94,
+        },
+        {
+          studentEmail: 'student@test.local',
+          courseCode: 'SEC-320',
+          courseName: 'Applied Cryptography',
+          examName: 'Final Exam - Public Key Infrastructure',
+          date: '2026-05-20',
+          score: 91,
+          grade: 'A-',
+          status: 'PASSED',
+          percentile: 89,
+        },
+        {
+          studentEmail: 'student@test.local',
+          courseCode: 'SEC-410',
+          courseName: 'Modern Identity & Authentication',
+          examName: 'MFA Architecture Assessment',
+          date: '2026-09-10',
+          score: 97,
+          grade: 'A+',
+          status: 'PASSED',
+          percentile: 98,
+        }
+      ]);
+    }
 
     // Seed Mandatory Identity Security Test Matrix T01-T12
-    const initialMatrix: Array<Omit<TestMatrixDoc, '_id' | 'createdAt' | 'updatedAt'>> = [
+    if (force || this.test_matrix.getAll().length === 0) {
+      const initialMatrix: Array<Omit<TestMatrixDoc, '_id' | 'createdAt' | 'updatedAt'>> = [
       {
         testId: 'T01',
         title: 'Valid password-only login',
@@ -732,8 +815,10 @@ export class Database {
       },
     ];
     this.test_matrix.insertMany(initialMatrix);
+    }
 
     // Seed baseline authentication comparison test runs
+    if (force || this.test_runs.getAll().length === 0) {
     const now = new Date();
     this.test_runs.insertMany([
       {
@@ -836,34 +921,38 @@ export class Database {
         details: 'Three-Factor Run 3: Multi-channel verification completed.',
       },
     ]);
+    }
 
     // Seed initial security audit logs demonstrating system readiness
-    this.authentication_logs.insertMany([
-      {
-        timestamp: new Date(now.getTime() - 3600000 * 4).toISOString(),
-        userEmail: 'system@authshield360.local',
-        role: 'ADMINISTRATOR',
-        event: 'SYSTEM_BOOTSTRAP',
-        factor: 'SYSTEM',
-        action: 'INITIALIZE_SECURITY_SUBSYSTEM',
-        result: 'SUCCESS',
-        details: 'AuthShield 360 SOC kernel initialized. Initial Administrator Ayan (ayanaptechh@gmail.com) provisioned.',
-        ipAddress: '127.0.0.1',
-        userAgent: 'AuthShield360-Daemon/1.0',
-      },
-      {
-        timestamp: new Date(now.getTime() - 3600000 * 3.5).toISOString(),
-        userEmail: 'ayanaptechh@gmail.com',
-        role: 'ADMINISTRATOR',
-        event: 'CONFIG_CHANGE',
-        factor: 'SYSTEM',
-        action: 'SET_DEFAULT_AUTH_MODE',
-        result: 'SUCCESS',
-        details: 'Default authentication mode configured to PASSWORD_ONLY (Baseline scenario).',
-        ipAddress: '127.0.0.1',
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-      },
-    ]);
+    if (force || this.authentication_logs.getAll().length === 0) {
+      const now = new Date();
+      this.authentication_logs.insertMany([
+        {
+          timestamp: new Date(now.getTime() - 3600000 * 4).toISOString(),
+          userEmail: 'system@authshield360.local',
+          role: 'ADMINISTRATOR',
+          event: 'SYSTEM_BOOTSTRAP',
+          factor: 'SYSTEM',
+          action: 'INITIALIZE_SECURITY_SUBSYSTEM',
+          result: 'SUCCESS',
+          details: 'AuthShield 360 SOC kernel initialized. Initial Administrator Ayan (ayanaptechh@gmail.com) provisioned.',
+          ipAddress: '127.0.0.1',
+          userAgent: 'AuthShield360-Daemon/1.0',
+        },
+        {
+          timestamp: new Date(now.getTime() - 3600000 * 3.5).toISOString(),
+          userEmail: 'ayanaptechh@gmail.com',
+          role: 'ADMINISTRATOR',
+          event: 'CONFIG_CHANGE',
+          factor: 'SYSTEM',
+          action: 'SET_DEFAULT_AUTH_MODE',
+          result: 'SUCCESS',
+          details: 'Default authentication mode configured to PASSWORD_ONLY (Baseline scenario).',
+          ipAddress: '127.0.0.1',
+          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        },
+      ]);
+    }
   }
 }
 

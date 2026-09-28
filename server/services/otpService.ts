@@ -4,6 +4,9 @@ import { AuditService } from './auditService';
 import { UltraMsgService } from './ultraMsgService';
 import { EmailService } from './emailService';
 
+import fs from 'fs';
+import path from 'path';
+
 export interface TestDispatch {
   id: string;
   type: 'MOBILE' | 'EMAIL';
@@ -15,9 +18,40 @@ export interface TestDispatch {
   providerStatus: string;
 }
 
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DISPATCHES_FILE = path.join(DATA_DIR, 'test_dispatches.json');
+
+function loadDispatchesFromDisk(): TestDispatch[] {
+  try {
+    if (fs.existsSync(DISPATCHES_FILE)) {
+      const raw = fs.readFileSync(DISPATCHES_FILE, 'utf-8');
+      if (raw.trim().length > 0) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load test dispatches:', err);
+  }
+  return [];
+}
+
+function saveDispatchesToDisk(dispatches: TestDispatch[]): void {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const tempPath = `${DISPATCHES_FILE}.${Date.now()}.tmp`;
+    fs.writeFileSync(tempPath, JSON.stringify(dispatches, null, 2), 'utf-8');
+    fs.renameSync(tempPath, DISPATCHES_FILE);
+  } catch (err) {
+    console.error('Failed to persist test dispatches:', err);
+  }
+}
+
 export class OtpService {
-  // Evaluator in-memory lab stream (allows reviewing dispatched codes in isolated testing without live SMS/SMTP)
-  private static testDispatches: TestDispatch[] = [];
+  // Evaluator persistent lab stream (allows reviewing dispatched codes in isolated testing without live SMS/SMTP)
+  private static testDispatches: TestDispatch[] = loadDispatchesFromDisk();
 
   /**
    * Hashes an OTP with a unique salt using SHA-256 to ensure no plaintext OTP is stored in database.
@@ -122,6 +156,7 @@ export class OtpService {
     if (OtpService.testDispatches.length > 25) {
       OtpService.testDispatches.pop();
     }
+    saveDispatchesToDisk(OtpService.testDispatches);
 
     // Audit log: Never expose plaintext code in audit logs
     await AuditService.logAuthEvent({
@@ -253,5 +288,6 @@ export class OtpService {
 
   public static clearTestDispatches(): void {
     this.testDispatches = [];
+    saveDispatchesToDisk(this.testDispatches);
   }
 }
