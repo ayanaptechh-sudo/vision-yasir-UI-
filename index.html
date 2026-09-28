@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AuthShield 360</title>
+    <meta name="description" content="AuthShield 360: VerifyVault - Identity Beyond Passwords. Production-grade cybersecurity educational platform comparing Password-Only, Password + OTP, and Password + Multi-Factor OTP with RBAC, failed-login protection, audit logging, and security testing." />
+    <meta property="og:title" content="AuthShield 360" />
+    <meta property="og:description" content="AuthShield 360: VerifyVault - Identity Beyond Passwords. Production-grade cybersecurity educational platform comparing Password-Only, Password + OTP, and Password + Multi-Factor OTP with RBAC, failed-login protection, audit logging, and security testing." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&family=Syne:wght@700;800;900&display=swap" rel="stylesheet">
+    <script>
+      // Guard & polyfill for iframe sandbox / container environments where
+      // window.fetch is defined as a getter-only property without a setter.
+      (function() {
+        try {
+          var realFetch = window.fetch ? window.fetch.bind(window) : null;
+          var currentFetch = realFetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return currentFetch || realFetch;
+            },
+            set: function(val) {
+              currentFetch = val;
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          // In case the property was already defined with configurable: false
+        }
+
+        // Intercept and suppress benign getter-only fetch TypeError from sandboxes/vConsole
+        var prevOnError = window.onerror;
+        window.onerror = function(msg, url, line, col, error) {
+          if (typeof msg === 'string' && msg.indexOf('fetch') !== -1 && (msg.indexOf('getter') !== -1 || msg.indexOf('read only') !== -1)) {
+            return true;
+          }
+          if (typeof prevOnError === 'function') {
+            return prevOnError.apply(this, arguments);
+          }
+          return false;
+        };
+
+        window.addEventListener('error', function(event) {
+          if (event && event.message && event.message.indexOf('fetch') !== -1 && (event.message.indexOf('getter') !== -1 || event.message.indexOf('read only') !== -1)) {
+            event.preventDefault();
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+          }
+        }, true);
+        // Theme initialization before first paint to prevent flash
+        try {
+          var savedTheme = localStorage.getItem('authshield_theme');
+          if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-50 dark:bg-[#070b14] text-slate-900 dark:text-slate-100 font-sans antialiased selection:bg-cyan-500/20 selection:text-cyan-700 dark:selection:text-cyan-200 transition-colors duration-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
